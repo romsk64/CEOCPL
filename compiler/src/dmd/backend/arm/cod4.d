@@ -13,7 +13,7 @@
  * Mostly code generation for assignment operators.
  *
  * Copyright:   Copyright (C) 1985-1998 by Symantec
- *              Copyright (C) 2000-2025 by The D Language Foundation, All Rights Reserved
+ *              Copyright (C) 2000-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/arm/cod4.d, backend/cod4.d)
@@ -56,8 +56,8 @@ nothrow:
 @trusted
 void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 {
-    printf("cdeq(e = %p, pretregs = %s)\n",e,regm_str(pretregs));
-    elem_print(e);
+    //printf("cdeq(e = %p, pretregs = %s)\n",e,regm_str(pretregs));
+    //elem_print(e);
 
     reg_t reg;
     code cs;
@@ -72,7 +72,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     int e2oper = e2.Eoper;
     tym_t tyml = tybasic(e1.Ety);              // type of lvalue
     regm_t retregs = pretregs;
-    regm_t allregs = tyfloating(tyml) ? INSTR.FLOATREGS : cgstate.allregs;
+    const regm_t allregs = tyfloating(tyml) ? INSTR.FLOATREGS : INSTR.ALLREGS;
 
     if (0 && tyxmmreg(tyml))    // TODO AArch64
     {
@@ -102,6 +102,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         if (e2oper == OPconst &&       // if rvalue is a constant
             !(evalinregister(e2) && plenty) &&
+            !tycomplex(tyml) &&
             !e1.Ecount)        // and no CSE headaches
         {
             // Look for special case of (*p++ = ...), where p is a register variable
@@ -139,7 +140,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             {
                 /* Move constant into r, then store r into EA
                  */
-                regm_t m = tyfloating(tyml) ? INSTR.FLOATREGS : cg.allregs;
+                regm_t m = allregs;
                 m &= ~(mask(cs.base) | mask(cs.index));
                 assert(NOREG < 64);  // otherwise mask(NOREG) will not work
                 reg_t r = allocreg(cdb, m, tyml);
@@ -159,11 +160,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             retregs &= ~INSTR.mBP;
     }
     if (retregs == mPSW)
-    {
         retregs = allregs;
-        if (sz == 2 * REGSIZE)
-            retregs &= ~INSTR.mBP;
-    }
     cs.Iop = 0;
     regvar = false;
     if (config.flags4 & CFG4optimized)
@@ -188,9 +185,9 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 tysize(e1.Vsym.Stype.Tty) == 2 * REGSIZE)
             {
                 if (e1.Voffset)
-                    retregs &= mMSW;
+                    retregs &= INSTR.MSW;
                 else
-                    retregs &= mLSW;
+                    retregs &= INSTR.LSW;
                 reg = findreg(retregs);
             }
         }
@@ -236,7 +233,10 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         reg_t mswreg = findreg(retregs & INSTR.MSW);
         assert(cs.index == NOREG);  // BUG AArch64 cannot add the '8' offset
         assert(cs.base != NOREG);
-        cs.Iop = INSTR.str_imm_gen(1, mswreg, cs.base, 8);
+        if (mask(mswreg) & INSTR.FLOATREGS)
+            cs.Iop = INSTR.str_imm_fpsimd(3, 0, 8, cs.base, mswreg); // https://www.scs.stanford.edu/~zyedidia/arm64/str_imm_fpsimd.html
+        else
+            cs.Iop = INSTR.str_imm_gen(1, mswreg, cs.base, 8);
         cdb.gen(&cs);
     }
     else
@@ -1431,7 +1431,7 @@ void cdcnvt(ref CGstate cg, ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
 
             regm_t retregs = pretregs & cg.allregs;
             if (retregs == 0)
-                retregs = ALLREGS & cgstate.allregs;
+                retregs = INSTR.ALLREGS & cgstate.allregs;
             const tym = tybasic(e.Ety);
             reg_t Rd = allocreg(cdb,retregs,tym);       // destination integer register
 
@@ -1474,7 +1474,7 @@ void cdcnvt(ref CGstate cg, ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
         case OPu16_d:    // and w0,w0,#0xFFFF // ucvtf d31,w0
         case OPu32_d:    // ucvtf d31,w0
         case OPu64_d:    // ucvtf d31,x0
-            regm_t retregs1 = ALLREGS;
+            regm_t retregs1 = INSTR.ALLREGS;
             codelem(cgstate,cdb,e.E1,retregs1,false);
             reg_t Rn = findreg(retregs1);               // source integer register
 
@@ -1836,8 +1836,8 @@ void cdbyteint(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         return;
     }
 
-    printf("cdbyteint(e = %p, pretregs = %s\n", e, regm_str(pretregs));
-    elem_print(e);
+    //printf("cdbyteint(e = %p, pretregs = %s\n", e, regm_str(pretregs));
+    //elem_print(e);
     const op = e.Eoper;
     elem* e1 = e.E1;
     if (e1.Eoper == OPcomma)
@@ -2050,7 +2050,7 @@ void cdpopcnt(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   /* if no return regs speced     */
                                         /* (like if wanted flags only)  */
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
     reg_t Rd = allocreg(cdb, retregs, tyml); // destination register
 
     const R1 = findreg(retregs1);       // source register

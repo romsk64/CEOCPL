@@ -1,7 +1,7 @@
 /**
  * Convert an AST that went through all semantic phases into an object file.
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/glue/toobj.d, _toobj.d)
@@ -396,9 +396,9 @@ void toObjFile(Dsymbol ds, bool multiobj)
 
                 // Generate static initializer
                 auto sinit = toInitializer(sd);
-                if (sinit.Sclass == SC.extern_)
+                if (sinit.Sclass == SC.extern_ &&
+                    strcmp(sinit.Sident.ptr, "__bzeroBytes") != 0) // might be from another object file
                 {
-                    if (sinit == bzeroSymbol) assert(0);
                     sinit.Sclass = sd.isInstantiated() ? SC.comdat : SC.global;
                     sinit.Sfl = FL.data;
                     auto dtb = DtBuilder(0);
@@ -589,8 +589,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
                     scclass = SC.comdat;
 
                 // Generate static initializer
-                toInitializer(ed);
-                auto sinit = cast(Symbol*) ed.sinit;
+                auto sinit = toInitializer(ed);
                 sinit.Sclass = scclass;
                 sinit.Sfl = FL.data;
                 auto dtb = DtBuilder(0);
@@ -990,6 +989,7 @@ uint baseVtblOffset(ClassDeclaration cd, BaseClass* bc)
 {
     //printf("ClassDeclaration.baseVtblOffset('%s', bc = %p)\n", cd.toChars(), bc);
     uint csymoffset = target.classinfosize;    // must be ClassInfo.size
+    //printf("target.classinfosize: %d\n", csymoffset);
     csymoffset += cd.vtblInterfaces.length * (4 * target.ptrsize);
 
     for (size_t i = 0; i < cd.vtblInterfaces.length; i++)

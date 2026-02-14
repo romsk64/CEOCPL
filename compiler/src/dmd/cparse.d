@@ -3,7 +3,7 @@
  *
  * Specification: C11
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/cparse.d, _cparse.d)
@@ -5779,8 +5779,7 @@ final class CParser(AST) : Parser!AST
                              * Rewrite to a template function:
                              *  auto ID()() { return identifier(args); }
                              */
-                            if (params)
-                                break;                          // function-like macro with params handled elsewhere
+                            assert(!params);                    // would be TOK.leftParenthesis
                             eLatch.sawErrors = false;
                             auto exp = cparseExpression();
                             if (eLatch.sawErrors)               // parsing errors

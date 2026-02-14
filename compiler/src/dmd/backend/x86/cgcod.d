@@ -2,7 +2,7 @@
  * Top level code for the code generator.
  *
  * Copyright:   Copyright (C) 1985-1998 by Symantec
- *              Copyright (C) 2000-2025 by The D Language Foundation, All Rights Reserved
+ *              Copyright (C) 2000-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/x86/cgcod.d, backend/cgcod.d)
@@ -1668,11 +1668,12 @@ static if (0)
         uint size = _tysize[tym];
         bool AArch64 = cgstate.AArch64;
         if (AArch64)
-            outretregs &= cgstate.allregs | INSTR.FLOATREGS;
+            outretregs &= INSTR.ALLREGS | INSTR.FLOATREGS;
         else
             outretregs &= mES | cgstate.allregs | XMMREGS | INSTR.FLOATREGS;
         regm_t retregs = outretregs;
         regm_t[] lastRetregs = cgstate.lastRetregs[];
+        bool isPair = isRegisterPair(AArch64, tym, retregs);
 
         debug if (retregs == 0)
             printf("allocreg: file %s(%d)\n", file, line);
@@ -1680,26 +1681,16 @@ static if (0)
         if ((retregs & cgstate.regcon.mvar) == retregs) // if exactly in reg vars
         {
             reg_t outreg;
-            if (size <= REGSIZE || (retregs & XMMREGS) || (retregs & INSTR.FLOATREGS))
+            if (isPair)
+            {
+                outreg = findreg(retregs & (AArch64 ? INSTR.MSW : mMSW));
+                assert(retregs & (AArch64 ? INSTR.LSW : mLSW));
+            }
+            else
             {
                 outreg = findreg(retregs);
                 assert(retregs == mask(outreg)); /* no more bits are set */
             }
-            else if (size <= 2 * REGSIZE)
-            {
-                if (AArch64)
-                {
-                    outreg = findreg(retregs & INSTR.MSW);
-                    assert(retregs & INSTR.LSW);
-                }
-                else
-                {
-                    outreg = findregmsw(retregs);
-                    assert(retregs & mLSW);
-                }
-            }
-            else
-                assert(0);
             getregs(cdb,retregs);
             return outreg;
         }
@@ -1726,33 +1717,16 @@ L3:
             }
         }
 
+        static if (0)
+        {
+            printf("%s\nallocreg: fil %s lin %d, regcon.mvar %s msavereg %s outretregs %s, reg %d, tym x%x\n",
+                tym_str(tym),file,line,regm_str(cgstate.regcon.mvar),regm_str(cgstate.msavereg),regm_str(outretregs),reg,tym);
+        }
+
         // TODO AArch64 needs work on floating point and complex floats
         if (AArch64)
         {
-            if (size <= REGSIZE || retregs & INSTR.FLOATREGS)
-            {
-                // If only one index register, prefer to not use LSW registers
-                if (!cgstate.regcon.indexregs && r & ~INSTR.LSW)
-                    r &= ~INSTR.LSW;
-
-                if (cgstate.pass == BackendPass.final_ && r & ~lastRetregs[0])
-                {   // Try not to always allocate the same register,
-                    // to schedule better
-
-                    foreach (lastr; lastRetregs)
-                    {
-                        if (regm_t rx = r & ~lastr)
-                            r = rx;
-                        else
-                            break;
-                    }
-                    if (r & ~cgstate.mfuncreg)
-                        r &= ~cgstate.mfuncreg;
-                }
-                reg = findreg(r);
-                retregs = mask(reg);
-            }
-            else if (size <= 2 * REGSIZE)
+            if (isPair)
             {
                 /* Select pair with both regs free. Failing */
                 /* that, select pair with one reg free.             */
@@ -1777,7 +1751,7 @@ L3:
                         assert(retregs);
                         goto L1;
                     }
-                    lsreg = findreglsw(r);
+                    lsreg = findreg(r & INSTR.LSW);
                     if (msreg == NOREG)
                     {
                         retregs &= INSTR.MSW;
@@ -1790,26 +1764,11 @@ L3:
             }
             else
             {
-                debug
-                {
-                    printf("%s\nallocreg: fil %s lin %d, regcon.mvar %s msavereg %s outretregs %s, reg %d, tym x%x\n",
-                        tym_str(tym),file,line,regm_str(cgstate.regcon.mvar),regm_str(cgstate.msavereg),regm_str(outretregs),reg,tym);
-                }
-                assert(0);
-            }
-        }
-        else // X86_64
-        {
-            if (size <= REGSIZE || retregs & XMMREGS)
-            {
-                if (r & ~mBP)
-                    r &= ~mBP;
-
                 // If only one index register, prefer to not use LSW registers
-                if (!cgstate.regcon.indexregs && r & ~mLSW)
-                    r &= ~mLSW;
+//                if (!cgstate.regcon.indexregs && r & ~INSTR.LSW)
+//                    r &= ~INSTR.LSW;
 
-                if (cgstate.pass == BackendPass.final_ && r & ~lastRetregs[0] && !I16)
+                if (cgstate.pass == BackendPass.final_ && r & ~lastRetregs[0])
                 {   // Try not to always allocate the same register,
                     // to schedule better
 
@@ -1826,7 +1785,10 @@ L3:
                 reg = findreg(r);
                 retregs = mask(reg);
             }
-            else if (size <= 2 * REGSIZE)
+        }
+        else // X86_64
+        {
+            if (isPair)
             {
                 /* Select pair with both regs free. Failing */
                 /* that, select pair with one reg free.             */
@@ -1871,30 +1833,51 @@ L3:
                 reg = (msreg == ES) ? lsreg : msreg;
                 retregs = mask(msreg) | mask(lsreg);
             }
-            else if (I16 && (tym == TYdouble || tym == TYdouble_alias))
-            {
-                debug
-                if (retregs != DOUBLEREGS)
-                    printf("retregs = %s, outretregs = %s\n", regm_str(retregs), regm_str(outretregs));
-
-                assert(retregs == DOUBLEREGS);
-                reg = AX;
-            }
             else
             {
-                debug
-                {
-                    printf("%s\nallocreg: fil %s lin %d, regcon.mvar %s msavereg %s outretregs %s, reg %d, tym x%x\n",
-                        tym_str(tym),file,line,regm_str(cgstate.regcon.mvar),regm_str(cgstate.msavereg),regm_str(outretregs),reg,tym);
+                if (r & ~mBP)
+                    r &= ~mBP;
+
+                // If only one index register, prefer to not use LSW registers
+                if (!cgstate.regcon.indexregs && r & ~mLSW)
+                    r &= ~mLSW;
+
+                if (cgstate.pass == BackendPass.final_ && r & ~lastRetregs[0] && !I16)
+                {   // Try not to always allocate the same register,
+                    // to schedule better
+
+                    foreach (lastr; lastRetregs)
+                    {
+                        if (regm_t rx = r & ~lastr)
+                            r = rx;
+                        else
+                            break;
+                    }
+                    if (r & ~cgstate.mfuncreg)
+                        r &= ~cgstate.mfuncreg;
                 }
-                assert(0);
+                reg = findreg(r);
+                retregs = mask(reg);
             }
+        }
+
+        static if (0) // no longer needed
+        if (I16 && (tym == TYdouble || tym == TYdouble_alias))
+        {
+            debug
+            if (retregs != DOUBLEREGS)
+                printf("retregs = %s, outretregs = %s\n", regm_str(retregs), regm_str(outretregs));
+
+            assert(retregs == DOUBLEREGS);
+            reg = AX;
         }
 
         if (retregs & cgstate.regcon.mvar)              // if conflict with reg vars
         {
+            bool pair = AArch64 ? (tycomplex(tym) || size > REGSIZE)
+                                : size > REGSIZE;
             regm_t PAIR = AArch64 ? 1|2 : mAX | mDX;
-            if (!(size > REGSIZE && outretregs == PAIR))
+            if (!(pair && outretregs == PAIR))
             {
                 retregs = (outretregs &= ~(retregs & cgstate.regcon.mvar));
                 goto L1;                // try other registers
@@ -2005,7 +1988,17 @@ private void cse_save(ref CodeBuilder cdb, regm_t ms)
 {
     //printf("cse_save() ms: %s\n", regm_str(ms));
     assert((ms & cgstate.regcon.cse.mops) == ms);
-    cgstate.regcon.cse.mops &= ~ms;
+
+    auto cg = &cgstate;
+    cg.regcon.cse.mops &= ~ms;
+
+    regm_t xMSW = mMSW;
+    regm_t xLSW = mLSW | mBP;
+    if (cgstate.AArch64)
+    {
+        xMSW = INSTR.MSW;
+        xLSW = INSTR.LSW;
+    }
 
     /* Skip CSEs that are already saved */
     for (regm_t regm = 1; regm < mask(NUMREGS); regm <<= 1)
@@ -2018,8 +2011,8 @@ private void cse_save(ref CodeBuilder cdb, regm_t ms)
             {
                 if (sz <= REGSIZE ||
                     sz <= 2 * REGSIZE &&
-                        (regm & mMSW && cse.regm & mMSW ||
-                         regm & mLSW && cse.regm & mLSW) ||
+                        (regm & xMSW && cse.regm & xMSW ||
+                         regm & xLSW && cse.regm & xLSW) ||
                     sz == 4 * REGSIZE && regm == cse.regm
                    )
                 {
@@ -2105,7 +2098,7 @@ bool cssave(elem* e, regm_t regm, bool opsflag)
 
         //printf("cssave(e = %p, regm = %s, opsflag = x%x)\n", e, regm_str(regm), opsflag);
         if (cgstate.AArch64)
-            regm &= cgstate.allregs | INSTR.FLOATREGS;
+            regm &= INSTR.ALLREGS | INSTR.FLOATREGS;
         else
             regm &= mBP | ALLREGS | mES | XMMREGS;    /* just to be sure              */
 /+
@@ -2131,7 +2124,7 @@ bool cssave(elem* e, regm_t regm, bool opsflag)
                     cgstate.regcon.cse.mval |= mi;
                     if (opsflag)
                         cgstate.regcon.cse.mops |= mi;
-                    //printf("cssave set: regcon.cse.value[%s] = %p\n",regstring[i],e);
+                    //printf("cssave set: regcon.cse.value[%s] = %p\n",regm_str(mi),e);
                     cgstate.regcon.cse.value[i] = e;
                     result = true;
                 }
@@ -2147,6 +2140,7 @@ bool cssave(elem* e, regm_t regm, bool opsflag)
 @trusted
 bool evalinregister(elem* e)
 {
+    //printf("evalinregister()\n");
     if (config.exe == EX_WIN64 && e.Eoper == OPrelconst)
         return true;
 
@@ -2158,6 +2152,7 @@ bool evalinregister(elem* e)
         return true;
 
     // Need to rethink this code if float or double can be CSE'd
+    bool AArch64 = cgstate.AArch64;
     uint sz = tysize(e.Ety);
     if (e.Ecount == e.Ecomsub)    /* elem is a CSE that needs     */
                                     /* to be generated              */
@@ -2168,7 +2163,7 @@ bool evalinregister(elem* e)
         {
             // Do it only if at least 2 registers are available
             regm_t m = cgstate.allregs & ~cgstate.regcon.mvar;
-            if (sz == 1)
+            if (sz == 1 && !AArch64)
                 m &= BYTEREGS;
             if (m & (m - 1))        // if more than one register
             {   // Need to be at least 3 registers available, as
@@ -2194,7 +2189,12 @@ bool evalinregister(elem* e)
     if (sz <= REGSIZE)
         return emask != 0;      /* the CSE is in a register     */
     if (sz <= 2 * REGSIZE)
-        return (emask & mMSW) && (emask & mLSW);
+    {
+        if (AArch64)
+            return (emask & INSTR.MSW) && (emask & INSTR.LSW);
+        else
+            return (emask & mMSW) && (emask & mLSW);
+    }
     return true;                    /* cop-out for now              */
 }
 
@@ -2401,10 +2401,20 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
     else                                  /* reg pair is req'd            */
     if (sz <= 2 * REGSIZE)
     {
+        regm_t xMSW = mMSW;
+        regm_t xLSW = mLSW | mBP;
+        regm_t xALLREGS = ALLREGS;
+        if (AArch64)
+        {
+            xMSW = INSTR.MSW;
+            xLSW = INSTR.LSW;
+            xALLREGS = INSTR.ALLREGS;
+        }
+
         reg_t msreg,lsreg;
 
         /* see if we have both  */
-        if (!((emask | csemask) & mMSW && (emask | csemask) & (mLSW | mBP)))
+        if (!((emask | csemask) & xMSW && (emask | csemask) & xLSW))
         {                               /* we don't have both           */
             debug if (!OTleaf(e.Eoper))
             {
@@ -2419,30 +2429,30 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
         }
 
         /* Look for right vals in any regs      */
-        regm_t regm = pretregs & mMSW;
+        regm_t regm = pretregs & xMSW;
         if (emask & regm)
             msreg = findreg(emask & regm);
-        else if (emask & mMSW)
-            msreg = findregmsw(emask);
+        else if (emask & xMSW)
+            msreg = findreg(emask & xMSW);
         else                    /* reload from cse array        */
         {
             if (!regm)
-                regm = mMSW & ALLREGS;
+                regm = xMSW & xALLREGS;
             msreg = allocreg(cdb,regm,TYint);
-            loadcse(cdb,e,msreg,mMSW);
+            loadcse(cdb,e,msreg,xMSW);
         }
 
-        regm = pretregs & (mLSW | mBP);
+        regm = pretregs & xLSW;
         if (emask & regm)
             lsreg = findreg(emask & regm);
-        else if (emask & (mLSW | mBP))
-            lsreg = findreglsw(emask);
+        else if (emask & xLSW)
+            lsreg = findreg(emask & xLSW);
         else
         {
             if (!regm)
-                regm = mLSW;
+                regm = xLSW;
             lsreg = allocreg(cdb,regm,TYint);
-            loadcse(cdb,e,lsreg,mLSW | mBP);
+            loadcse(cdb,e,lsreg,xLSW);
         }
 
         regm = mask(msreg) | mask(lsreg);       /* mask of result       */
@@ -2784,7 +2794,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
         assert(0);
     }
 
-    regm_t tmask = cg.AArch64 ? (cg.allregs | INSTR.FLOATREGS)
+    regm_t tmask = cg.AArch64 ? (INSTR.ALLREGS | INSTR.FLOATREGS)
                               : (mES | ALLREGS | mBP | XMMREGS);
     if (!(constflag & 1) && pretregs & tmask & ~cg.regcon.mvar)
         pretregs &= ~cg.regcon.mvar;                      /* can't use register vars */
@@ -2851,7 +2861,12 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
                 (s.Sregm & pretregs) == s.Sregm)
             {
                 if (tysize(e.Ety) <= REGSIZE && tysize(s.Stype.Tty) == 2 * REGSIZE)
-                    pretregs &= mPSW | (s.Sregm & mLSW);
+                {
+                    if (cg.AArch64)
+                        pretregs &= mPSW | (s.Sregm & INSTR.LSW);
+                    else
+                        pretregs &= mPSW | (s.Sregm & mLSW);
+                }
                 else
                     pretregs &= mPSW | s.Sregm;
             }
@@ -2901,7 +2916,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
                 }
                 if (cg.AArch64)
                 {
-                    pretregs = tyfloating(e.Ety) ? INSTR.FLOATREGS : cg.allregs;
+                    pretregs = tyfloating(e.Ety) ? INSTR.FLOATREGS : INSTR.ALLREGS;
                 }
             }
             loaddata(cdb,e,pretregs);
@@ -2958,7 +2973,12 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
             uint sz1 = tysize(e.Ety);
             uint sz2 = tysize(e.Vsym.Stype.Tty);
             if (sz1 <= REGSIZE && sz2 > REGSIZE)
-                regm &= mLSW | XMMREGS;
+            {
+                if (cg.AArch64)
+                    regm &= INSTR.LSW;
+                else
+                    regm &= mLSW | XMMREGS;
+            }
             fixresult(cdb,e,regm,pretregs);
             cssave(e,regm,0);
             freenode(e);
@@ -3320,7 +3340,7 @@ void disassemble(ubyte[] code)
     @trusted
     void put(char c) { printf("%c", c); }
 
-    dmd.backend.arm.disasmarm.getopstring(&put, (cast(ubyte*)&ins)[0..4], 0, 4, 64, false, true, false,
+    dmd.backend.arm.disasmarm.getopstring(&put, (cast(ubyte*)&ins)[0..4], 0, 4, 64, false, true, /*bURL*/ true,
             null, null, null, null);
     printf("\n");
 }

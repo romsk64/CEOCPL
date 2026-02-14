@@ -11,7 +11,7 @@
  * $(LINK2 https://www.dlang.org, D programming language).
  *
  * Copyright:   Copyright (C) 1984-1998 by Symantec
- *              Copyright (C) 2000-2025 by The D Language Foundation, All Rights Reserved
+ *              Copyright (C) 2000-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/arm/cod2.d, backend/cod2.d)
@@ -83,7 +83,6 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     reg_t Rn = findreg(retregs1);
 
     regm_t retregs2 = posregs & ~retregs1;
-//printf("retregs1: %s retregs2: %s\n", regm_str(retregs1), regm_str(retregs2));
     scodelem(cg, cdb, e2, retregs2, retregs1, false);
     reg_t Rm = findreg(retregs2);
 
@@ -202,7 +201,7 @@ Extend tyToExtend(tym_t ty)
 {
     //debug printf("ty: %s x%x\n", tym_str(ty), ty);
     ty = tybasic(ty);
-    assert(tyintegral(ty) || ty == TYnptr);
+    assert(tyintegral(ty) || ty == TYnptr || ty == TYnref || ty == TYimmutPtr);
     Extend extend;
     const sz = tysize(ty);
     with (Extend) switch (sz)
@@ -262,7 +261,7 @@ void cdmul(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   /* if no return regs speced     */
                                         /* (like if wanted flags only)  */
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
     reg_t Rd = allocreg(cdb, retregs, ty);
 
     reg_t Rn = findreg(retregs1);
@@ -317,7 +316,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   // if no return regs speced (i.e. flags only)
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
 
     reg_t Rdividend = findreg(retregs1);  // dividend
     reg_t Rdivisor  = findreg(retregs2);  // divisor
@@ -415,8 +414,9 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         regm_t retregs = pretregs & cgstate.allregs;
         if (!retregs)
             retregs = cgstate.allregs;
-        const Rd = findreg(retregs);
+        const Rd = allocreg(cdb, retregs, tybasic(e.Ety));
         const cond = op == OPnot ? COND.ne : COND.eq;
+        sz = tysize(e.Ety);
         cdb.gen1(INSTR.cset(sz == 8,cond,Rd));          // CSET Rd,eq
         uint N,immr,imms;
         assert(encodeNImmrImms(0xFF,N,immr,imms));
@@ -434,10 +434,11 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         regm_t retregs = pretregs & cg.allregs;
         if (retregs == 0)                   // if no return regs speced
                                             // (like if wanted flags only)
-            retregs = ALLREGS & posregs;    // give us some
+            retregs = INSTR.ALLREGS & posregs;    // give us some
         const tym = tybasic(e.Ety);
         reg_t Rd = allocreg(cdb, retregs, tym); // destination register
 
+        sz = tysize(e.Ety);
         uint sf = sz == 8;
 
         cdb.gen1(INSTR.cmp_imm(sf,0,0,R1));  // CMP R1,#0
@@ -522,7 +523,7 @@ void cdbswap(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   /* if no return regs speced     */
                                         /* (like if wanted flags only)  */
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
     reg_t Rd = allocreg(cdb, retregs, tyml);
 
     const Rn = findreg(retregs1);
@@ -767,7 +768,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         retregs &= ~mPSW;
         if (!retregs)
-            retregs = ALLREGS;
+            retregs = INSTR.ALLREGS;
         codelem(cgstate,cdb1,e21,retregs,false);
         fixresult(cdb1,e21,retregs,pretregs);
     }
@@ -805,7 +806,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         retregs &= ~mPSW;
         if (!retregs)
-            retregs = ALLREGS;
+            retregs = INSTR.ALLREGS;
         codelem(cgstate,cdb2,e22,retregs,false);
         fixresult(cdb2,e22,retregs,pretregs);
     }
@@ -1013,7 +1014,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   /* if no return regs speced     */
                                         /* (like if wanted flags only)  */
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
     reg_t Rd = allocreg(cdb, retregs, tyml);
 
     reg_t Rn = findreg(retregs1);
@@ -1070,19 +1071,44 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     codelem(cg,cdb,e.E1,retregs1,false);
     const Rn = findreg(retregs1);           // Rn is the pointer
 
+    bool isPair = isRegisterPair(true, tym, 0);
+
     if (tyfloating(tym))
     {
         regm_t retregs = pretregs & INSTR.FLOATREGS;
         if (retregs == 0)                   /* if no return regs speced (such as mPSW)     */
             retregs = INSTR.FLOATREGS;      // give us some
-        reg_t Rt = allocreg(cdb, retregs, tym);
 
-        code cs;
-        cs.base = Rn;
-        cs.reg = NOREG;
-        cs.index = NOREG;
-        loadFromEA(cs, Rt, sz, sz);     // LDR reg,[cs.base]
-        cdb.gen1(cs.Iop);
+        if (isPair)
+        {
+            reg_t Rlsw = findreg(retregs & INSTR.FLOATREGS & INSTR.LSW);
+            reg_t Rmsw = findreg(retregs & INSTR.FLOATREGS & INSTR.MSW);
+            uint imm12 = 0;
+            uint size;
+            uint opc;
+            INSTR.szToSizeOpcLdr(sz / 2, size, opc);
+            //printf("sz: %d size: %d, opc: %d\n", sz, size, opc);
+            if (Rn == Rlsw)                 // collision, reverse load order
+            {
+                cdb.gen1(INSTR.ldst_pos(size,1,opc,imm12+1,Rn,Rmsw)); // https://www.scs.stanford.edu/~zyedidia/arm64/ldr_imm_fpsimd.html
+                cdb.gen1(INSTR.ldst_pos(size,1,opc,imm12  ,Rn,Rlsw)); // LDR Rlsw,[Rn,#imm12]
+            }
+            else
+            {
+                cdb.gen1(INSTR.ldst_pos(size,1,opc,imm12  ,Rn,Rlsw));
+                cdb.gen1(INSTR.ldst_pos(size,1,opc,imm12+1,Rn,Rmsw));
+            }
+        }
+        else
+        {
+            code cs;
+            cs.base = Rn;
+            cs.reg = NOREG;
+            cs.index = NOREG;
+            reg_t Rt = allocreg(cdb, retregs, tym);
+            loadFromEA(cs, Rt, sz, sz);     // LDR Rt,[cs.base]
+            cdb.gen1(cs.Iop);
+        }
 
         fixresult(cdb,e,retregs,pretregs);
         return;
@@ -1090,17 +1116,14 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   /* if no return regs speced (such as mPSW)     */
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
     reg_t Rt = allocreg(cdb, retregs, tym);
 
-    uint size;
-    uint VR = 0;
-    uint opc;
 
-    if (sz == 2 * REGSIZE)
+    if (isPair)
     {
-        reg_t Rlsw = findreg(retregs & ALLREGS & INSTR.LSW);
-        reg_t Rmsw = findreg(retregs & ALLREGS & INSTR.MSW);
+        reg_t Rlsw = findreg(retregs & INSTR.ALLREGS & INSTR.LSW);
+        reg_t Rmsw = findreg(retregs & INSTR.ALLREGS & INSTR.MSW);
         uint imm12 = 0;
         if (Rn == Rlsw)                 // collision, reverse load order
         {
@@ -1119,6 +1142,8 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     uint decode(uint to, uint from, bool uns) { return to * 4 * 2 + from * 2 + uns; }
 
     // TODO AArch64 consider loadFromEA() instead
+    uint opc;
+    uint size;
     switch (decode(sz == 8 ? 8 : 4, sz, uns))
     {
     /*
@@ -1159,6 +1184,7 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             assert(0);
     }
 
+    uint VR = 0;
     uint imm12 = 0;
     cdb.gen1(INSTR.ldst_pos(size,VR,opc,imm12,Rn,Rt));
 
@@ -1279,7 +1305,7 @@ void cdmemcmp(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 @trusted
 void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 {
-    printf("cdmemcpy()\n");
+    //printf("cdmemcpy()\n");
     /*  Generate the following:
         CBZ  Xn,L2
         MOV  x5,#0
@@ -1371,6 +1397,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 {
     //printf("cdmemset(pretregs = %s)\n", regm_str(pretregs));
+    //elem_print(e);
     elem* e2 = e.E2;
     assert(e2.Eoper == OPparam);
 
@@ -1384,14 +1411,14 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         return;
     }
 
-    if (enumbytes.Eoper == OPconst ||
-        evalue.Eoper == OPstrpar) // happens if evalue is a struct of 0 size
+    /* generate inline code if numbytes and value are constants
+     */
+    if (enumbytes.Eoper == OPconst &&
+        (evalue.Eoper == OPconst ||
+         evalue.Eoper == OPstrpar)) // happens if evalue is a struct of 0 size
     {
         // Get nbytes into nbytesreg
-        regm_t nbytesregs = cgstate.allregs & ~pretregs;
-        if (!nbytesregs)
-            nbytesregs = cgstate.allregs;
-        codelem(cgstate,cdb,enumbytes,nbytesregs,false);
+        regm_t nbytesregs = 0;
 
         ulong value = evalue.Eoper == OPstrpar ? 0 : el_tolong(evalue) & 0xFF;
         value |= value << 8;
@@ -1436,7 +1463,8 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             genmovreg(cdb,retreg,dstreg);           // MOV retreg,dstreg
         }
 
-        uint numbytes = cast(uint)el_tolong(enumbytes);
+        const uint numbytes = cast(uint)el_tolong(enumbytes);
+        freenode(enumbytes);
         if (const n = numbytes & ~(REGSIZE - 1))
         {
             regm_t limits = cgstate.allregs & ~(nbytesregs | valueregs | dstregs | retregs);
@@ -1464,7 +1492,8 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         return;
     }
 
-    /* ptr => x0
+    /* call memset()
+     * ptr => x0
      * value => w1
      * num => x2
      */
@@ -1594,7 +1623,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
     uint option = tyToExtend(enelems.Ety);
     uint opc;
     uint imm3;
-    INSTR.szToSizeOpc(szv,imm3,opc);    // shift 0..4
+    INSTR.szToSizeOpcStr(szv,imm3,opc);    // shift 0..4
     int is64 = szv == REGSIZE * 2;
     if (is64)
     {
@@ -1606,8 +1635,15 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
     if (Rp != Rd)
         genmovreg(cdb,Rp,Rd);
 
-    assert(szv == 4 || szv == 8);
-    cdb.gen1(INSTR.str_imm_gen_post_index(is64,szv,Rp,Rv));       // L2: STR  Rv,[Rp],#szv    // *Rp++ = Rv
+    if (szv == 2)
+    {
+        cdb.gen1(INSTR.str_imm_gen_post_index(is64,szv,Rp,Rv));   // STRH Rv,[Rp],#2
+    }
+    else
+    {
+        assert(szv == 4 || szv == 8);
+        cdb.gen1(INSTR.str_imm_gen_post_index(is64,szv,Rp,Rv));   // L2: STR  Rv,[Rp],#szv    // *Rp++ = Rv
+    }
     code* L2 = cdb.last();
     if (szv == REGSIZE * 2)
         cdb.gen1(INSTR.str_imm_gen_post_index(is64,szv,Rp,Rvhi)); // L2: STR  Rvhi,[Rp],#szv  // *Rp++ = Rvhi
@@ -1627,8 +1663,8 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
 @trusted
 void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 {
-    printf("cdstreq(e = %p, pretregs = %s)\n", e, regm_str(pretregs));
-    elem_print(e);
+    //printf("cdstreq(e = %p, pretregs = %s)\n", e, regm_str(pretregs));
+    //elem_print(e);
     char need_DS = false;
     elem* e1 = e.E1;
     elem* e2 = e.E2;
@@ -2075,7 +2111,7 @@ static if (0)
             if (config.exe & EX_posix)
             {
                 if (log) printf("posix extern threaded\n");
-                regm_t scratch = ALLREGS & ~mask(reg);
+                regm_t scratch = INSTR.ALLREGS & ~mask(reg);
                 reg_t r = allocreg(cdb, scratch, TYoffset);
                 uint ins = INSTR.systemmove(1,INSTR.tpidr_el0,r);  // MRS r,tpidr_el0
                 cdb.gen1(ins);
@@ -2165,7 +2201,14 @@ static if (0)
                 cs.IEV1.Vsym = e.Vsym;
                 cs.IEV1.Voffset = 0;
                 cdb.gen(&cs);
-                cdb.gen1(INSTR.addsub_imm(1,0,0,sh,cast(uint)e.Voffset,reg,reg)); // ADD reg,reg,Voffset
+                uint op = 0;    // add
+                int off = cast(int)e.Voffset;
+                if (off < 0)
+                {
+                    op = 1;     // sub
+                    off = -off;
+                }
+                cdb.gen1(INSTR.addsub_imm(1,op,0,sh,off,reg,reg)); // ADD/SUB reg,reg,Voffset
                 // TODO AArch64 common subexpressions?
                 //loadea(cdb,e,cs,LEA,reg,0,0,0);   // LEA reg,EA
             }
@@ -2316,7 +2359,7 @@ void cdabs(ref CGstate cg, ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
     regm_t retregs = pretregs & cg.allregs;
     if (retregs == 0)                   /* if no return regs speced     */
                                         /* (like if wanted flags only)  */
-        retregs = ALLREGS & posregs;    // give us some
+        retregs = INSTR.ALLREGS & posregs;    // give us some
     reg_t Rd = allocreg(cdb, retregs, tyml);
 
     const Rn = findreg(retregs1);
@@ -2461,7 +2504,7 @@ void cdpost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if ((retregs & INSTR.LSW) == 0)
                 retregs |= INSTR.LSW & ~idxregs;
         if ((retregs & INSTR.MSW) == 0)
-                retregs |= ALLREGS & INSTR.MSW;
+                retregs |= INSTR.ALLREGS & INSTR.MSW;
         assert(retregs & INSTR.MSW && retregs & INSTR.LSW);
         const reg = allocreg(cdb,retregs,tyml);
         uint sreg = findreg(retregs & INSTR.LSW);

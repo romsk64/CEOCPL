@@ -1,7 +1,7 @@
 /**
  * Defines AST nodes for the parsing stage.
  *
- * Copyright:   Copyright (C) 1999-2024 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/astbase.d, _astbase.d)
  * Documentation:  https://dlang.org/phobos/dmd_astbase.html
@@ -539,10 +539,9 @@ struct ASTBase
         uint fieldWidth;
         uint bitOffset;
 
-        final extern (D) this(Loc loc, Type type, Identifier id, Expression width)
+        final extern (D) this(Loc loc, Type type, Identifier id, Expression width, Initializer _init = null)
         {
-            super(loc, type, id, cast(Initializer)null, cast(StorageClass)STC.none);
-
+            super(loc, type, id, _init, cast(StorageClass)STC.none);
             this.width = width;
             this.storage_class |= STC.field;
         }
