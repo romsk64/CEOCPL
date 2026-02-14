@@ -3,7 +3,7 @@
  *
  * Specification: $(LINK2 https://dlang.org/spec/function.html, Functions)
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/funcsem.d, _funcsem.d)
@@ -2096,12 +2096,12 @@ FuncDeclaration resolveFuncCall(Loc loc, Scope* sc, Dsymbol s,
         }
 
         bool calledHelper;
-        void errorHelper(const(char)* failMessage) scope
+        void errorHelper(const(char)* failMessage, Loc argloc = Loc.initial) scope
         {
             .error(loc, "%s `%s%s%s` is not callable using argument types `%s`",
                    fd.kind(), fd.toPrettyChars(), parametersTypeToChars(tf.parameterList),
                    tf.modToChars(), fargsBuf.peekChars());
-            errorSupplemental(loc, failMessage);
+            errorSupplemental((argloc !is Loc.initial) ? argloc : loc, failMessage);
             calledHelper = true;
         }
 
@@ -2169,9 +2169,9 @@ FuncDeclaration resolveFuncCall(Loc loc, Scope* sc, Dsymbol s,
         }
     }
 
-    void errorHelper2(const(char)* failMessage) scope
+    void errorHelper2(const(char)* failMessage, Loc argloc = Loc.initial) scope
     {
-        errorSupplemental(loc, failMessage);
+        errorSupplemental((argloc !is Loc.initial) ? argloc : loc, failMessage);
     }
 
     functionResolve(m, orig_s, loc, sc, tiargs, tthis, argumentList, &errorHelper2);
@@ -4282,16 +4282,43 @@ bool arrayBoundsCheck(FuncDeclaration fd)
     case CHECKENABLE.on:
         return true;
     case CHECKENABLE.safeonly:
+        if (fd)
         {
+            Type t = fd.type;
+            if (t.isTypeFunction() && t.isTypeFunction().trust == TRUST.safe)
+                return true;
+        }
+        return false;
+    case CHECKENABLE._default:
+        assert(0);
+    }
+}
+
+/**********************
+ * Check to see if null dereference checking code has to be generated
+ *
+ * Params:
+ *  fd = function for which code is to be generated
+ * Returns:
+ *  true if do null dereference checking for the given function
+ */
+bool nullDerefCheck(FuncDeclaration fd)
+{
+    final switch (global.params.useNullCheck)
+    {
+        case CHECKENABLE.off:
+            return false;
+        case CHECKENABLE.on:
+            return true;
+        case CHECKENABLE.safeonly:
             if (fd)
             {
                 Type t = fd.type;
-                if (t.ty == Tfunction && (cast(TypeFunction)t).trust == TRUST.safe)
+                if (t.isTypeFunction() && t.isTypeFunction().trust == TRUST.safe)
                     return true;
             }
             return false;
-        }
-    case CHECKENABLE._default:
-        assert(0);
+        case CHECKENABLE._default:
+            assert(0);
     }
 }

@@ -3,7 +3,7 @@
  *
  * generateCodeAndWrite() is the only function seen by the front end.
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/glue/glue.d, _glue.d)
@@ -361,7 +361,7 @@ tym_t totym(Type tx)
                     if (target.os == Target.OS.Windows)
                     {
                     }
-                    else if (!target.isX86_64 && retStyle(tf, false) == RET.stack)
+                    else if (target.isX86 && retStyle(tf, false) == RET.stack)
                         t = TYhfunc;
                     break;
 
@@ -465,7 +465,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     scope (exit) timeTraceEndEvent(TimeTraceEventType.codegenFunction, fd);
 
     if (multiobj && !fd.isStaticDtorDeclaration() && !fd.isStaticCtorDeclaration()
-        && !(fd.isCrtCtor || fd.isCrtDtor))
+        && !(fd.isCrtCtor || fd.isCrtDtor) && !(fd.storage_class & STC.static_ && fd.isCsymbol()))
     {
         obj_append(fd);
         return;

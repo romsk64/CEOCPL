@@ -4,7 +4,7 @@
  * The AST is traversed, and every function call is considered for inlining using `inlinecost.d`.
  * The function call is then inlined if this cost is below a threshold.
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/inline.d, _inline.d)
@@ -471,7 +471,10 @@ public:
         static if (asStatements)
             result = new ThrowStatement(s.loc, doInlineAs!Expression(s.exp, ids));
         else
-            result = null;  // cannot be inlined as an Expression
+        {
+            result = new ThrowExp(s.loc, doInlineAs!Expression(s.exp, ids));
+            result.type = Type.tnoreturn;
+        }
     }
 
     // Expression -> (Statement | Expression)
@@ -736,7 +739,8 @@ public:
                         return;
                     }
                 }
-                if (vd.isStatic())
+
+                if (vd.isStatic() || (vd.storage_class & STC.manifest))
                     return;
 
                 bool varIsNRVO = ids.fd && (ids.fd.isNRVO && vd == ids.fd.nrvo_var || vd.nrvo);
@@ -2080,7 +2084,7 @@ private bool canInline(FuncDeclaration fd, bool hasThis, bool statementsToo, PAS
         {
             /* for the isTypeSArray() case see https://github.com/dlang/dmd/pull/16145#issuecomment-1932776873
              */
-            if (tfnext.ty != Tvoid &&
+            if (tfnext.ty != Tvoid && tfnext.ty != Tnoreturn &&
                 (!fd.hasReturnExp ||
                  hasDtor(tfnext) && (statementsToo || tfnext.isTypeSArray())))
             {
@@ -2469,7 +2473,7 @@ private void expandInline(CallExp ecall, FuncDeclaration fd, FuncDeclaration par
             e = e.toLvalue(null, "`ref` return");
 
         // https://issues.dlang.org/show_bug.cgi?id=15210
-        if (tf.next.ty == Tvoid && e && e.type.ty != Tvoid)
+        if (tf.next.ty == Tvoid && e && e.type.ty != Tvoid && e.type.ty != Tnoreturn)
         {
             e = new CastExp(callLoc, e, Type.tvoid);
             e.type = Type.tvoid;

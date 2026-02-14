@@ -8,7 +8,7 @@
  * i.e. rewriting trees to less expensive trees.
  *
  * Copyright:   Copyright (C) 1985-1998 by Symantec
- *              Copyright (C) 2000-2025 by The D Language Foundation, All Rights Reserved
+ *              Copyright (C) 2000-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/cgelem.d, backend/cgelem.d)
@@ -767,7 +767,7 @@ private elem* elmemset(elem* e, Goal goal)
      */
 
     const sz = tysize(evalue.Ety);
-    int nelems = cast(int)el_tolong(enelems);
+    long nelems = el_tolong(enelems);
     ulong value = el_tolong(evalue);
 
     if (sz * nelems > REGSIZE * 4)
@@ -795,9 +795,9 @@ private elem* elmemset(elem* e, Goal goal)
     }
     e.E1 = null;             // so we can free e later
 
-    for (int offset = 0; offset < sz * nelems; )
+    for (ulong offset = 0; offset < sz * nelems; )
     {
-        int left = sz * nelems - offset;
+        ulong left = sz * nelems - offset;
         if (left > REGSIZE)
             left = REGSIZE;
         tym_t tyv;
@@ -863,23 +863,30 @@ private elem* elmemcpy(elem* e, Goal goal)
                 el_free(ex);
                 return optelem(e, Goal.value);
             }
-            // Convert OPmemcpy to OPstreq
-            e.Eoper = OPstreq;
-            type* t = type_allocn(TYarray, tstypes[TYchar]);
-            t.Tdim = cast(uint)el_tolong(ex.E2);
-            e.ET = t;
-            t.Tcount++;
-            e.E1 = el_una(OPind,TYstruct,e.E1);
-            e.E2 = el_una(OPind,TYstruct,ex.E1);
-            ex.E1 = null;
-            el_free(ex);
-            ex = el_copytree(e.E1.E1);
-            if (tysize(e.Ety) > tysize(ex.Ety))
-                ex = el_una(OPnp_fp,e.Ety,ex);
-            e = el_bin(OPcomma,e.Ety,e,ex);
-            if (el_sideeffect(e.E2))
-                fixside(&e.E1.E1.E1,&e.E2);
-            return optelem(e, Goal.value);
+
+            // Unfortunately the optimizer casts type sizes to int
+            // Set up a safeguard for this optimization
+            const sz = el_tolong(ex.E2);
+            if (sz <= int.max)
+            {
+                // Convert OPmemcpy to OPstreq
+                e.Eoper = OPstreq;
+                type* t = type_allocn(TYarray, tstypes[TYchar]);
+                t.Tdim = sz;
+                e.ET = t;
+                t.Tcount++;
+                e.E1 = el_una(OPind,TYstruct,e.E1);
+                e.E2 = el_una(OPind,TYstruct,ex.E1);
+                ex.E1 = null;
+                el_free(ex);
+                ex = el_copytree(e.E1.E1);
+                if (tysize(e.Ety) > tysize(ex.Ety))
+                    ex = el_una(OPnp_fp,e.Ety,ex);
+                e = el_bin(OPcomma,e.Ety,e,ex);
+                if (el_sideeffect(e.E2))
+                    fixside(&e.E1.E1.E1,&e.E2);
+                return optelem(e, Goal.value);
+            }
         }
 
         /+ The following fails the autotester for Linux32 and FreeBSD32
@@ -1219,7 +1226,7 @@ private elem* elmin(elem* e, Goal goal)
         }
 
         // Replace (e - e) with (0)
-        if (el_match(e1,e2) && !el_sideeffect(e1))
+        if (el_match(e1,e2) && !el_sideeffect(e1) && !tyfloating(e1.Ety))
         {
             el_free(e);
             e = el_calloc();
@@ -2144,6 +2151,10 @@ private elem* elcond(elem* e, Goal goal)
                 el_free(e1);
                 return elcond(e,goal);
             }
+            if (e1.Ety == TYnoreturn)
+            {
+                return el_selecte1(e);
+            }
             if (!OPTIMIZER)
                 break;
 
@@ -2475,6 +2486,12 @@ L2:
         goto L2;
     }
 
+    if (e1.Ety == TYnoreturn)
+    {
+        e = el_selecte1(e);
+        goto Lret;
+    }
+
     if ((OTopeq(e1op) || e1op == OPeq) &&
         (e1.E1.Eoper == OPvar || e1.E1.Eoper == OPind) &&
         !el_sideeffect(e1.E1)
@@ -2775,6 +2792,11 @@ private elem* eloror(elem* e, Goal goal)
         return eloror(e, goal);
     }
 
+    if (e1.Ety == TYnoreturn)
+    {
+        return el_selecte1(e);
+    }
+
     elem* e2 = e.E2;
     if (OTboolnop(e2.Eoper))
     {
@@ -3073,6 +3095,10 @@ private elem* elandand(elem* e, Goal goal)
         e1.E1 = null;
         el_free(e1);
         return elandand(e, goal);
+    }
+    if (e1.Ety == TYnoreturn)
+    {
+        return el_selecte1(e);
     }
     elem* e2 = e.E2;
     if (OTboolnop(e2.Eoper))
@@ -3644,7 +3670,8 @@ elem* elstruct(elem* e, Goal goal)
                 }
                 else if (I64 && targ1 && targ2)
                 {
-                    if (tyfloating(tybasic(targ1.Tty)))
+                    if (tyfloating(tybasic(targ1.Tty)) &&
+                        !cgstate.AArch64) // TODO AArch64
                         tym = TYcdouble;
                     else if (0 && cgstate.AArch64)
                         goto Ldefault;

@@ -7,7 +7,7 @@
  * $(LINK2 https://www.dlang.org, D programming language).
  *
  * Copyright:   Copyright (C) 1984-1998 by Symantec
- *              Copyright (C) 2000-2025 by The D Language Foundation, All Rights Reserved
+ *              Copyright (C) 2000-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/arm/cod1.d, backend/cod1.d)
@@ -85,7 +85,7 @@ void loadFromEA(ref code cs, reg_t reg, uint szw, uint szr)
             assert(cs.index == NOREG);
             uint imm12 = 0; // cast(uint)cs.IEV1.Voffset added in by assignaddrc()
             uint size, opc;
-            INSTR.szToSizeOpc(szw, size, opc);
+            INSTR.szToSizeOpcLdr(szw, size, opc);
             if (szr & (szr - 1)) // if misaligned
             {
                 cs.Iop = INSTR.ldur_imm_fpsimd(size,opc,imm12,cs.base,reg);
@@ -93,6 +93,7 @@ void loadFromEA(ref code cs, reg_t reg, uint szw, uint szr)
             else
             {
                 imm12 /= szr;
+                //debug printf("szw: %d size: %d opc: %d\n", szw, size, opc);
                 cs.Iop = INSTR.ldr_imm_fpsimd(size,opc,imm12,cs.base,reg);
             }
         }
@@ -223,7 +224,7 @@ void storeToEA(ref code cs, reg_t reg, uint sz)
             assert(cs.index == NOREG);
             uint imm12 = 0; // addaddrc() will add in cast(uint)cs.IEV1.Voffset;
             uint size, opc;
-            INSTR.szToSizeOpc(sz, size, opc);
+            INSTR.szToSizeOpcStr(sz, size, opc);
             imm12 /= sz;
             cs.Iop = INSTR.str_imm_fpsimd(size,opc,imm12,cs.base,reg);
         }
@@ -537,8 +538,9 @@ void loadea(ref CodeBuilder cdb,elem* e,ref code cs,uint op,reg_t reg,targ_size_
     cs.Iop = op;
     tym_t tym = e.Ety;
     int sz = tysize(tym);
-    if (tybasic(tym) == TYucent)
-        sz = 8;
+    bool isPair = isRegisterPair(true, tym, 0);
+    if (isPair)
+        sz >>= 1;
 
     /* Determine if location we want to get is in a register. If so,      */
     /* substitute the register for the EA.                                */
@@ -549,7 +551,7 @@ void loadea(ref CodeBuilder cdb,elem* e,ref code cs,uint op,reg_t reg,targ_size_
     {
         assert(OTleaf(e.Eoper));         /* can't handle operands         */
         regm_t rm = cgstate.regcon.cse.mval & ~cgstate.regcon.cse.mops & ~cgstate.regcon.mvar; // possible regs
-        if (sz == REGSIZE * 2)          // value is in 2 registers
+        if (isPair)                      // value is in 2 registers
         {
             if (offset)
                 rm &= INSTR.MSW;             /* only high words      */
@@ -640,8 +642,8 @@ void getlvalue(ref CodeBuilder cdb,ref code pcs,elem* e,regm_t keepmsk,RM rm = R
     tym_t e1ty;
     Symbol* s;
 
-    printf("getlvalue(e = %p, keepmsk = %s)\n", e, regm_str(keepmsk));
-    elem_print(e);
+    //printf("getlvalue(e = %p, keepmsk = %s)\n", e, regm_str(keepmsk));
+    //elem_print(e);
     assert(e);
     elem_debug(e);
     if (e.Eoper == OPvar || e.Eoper == OPrelconst)
@@ -677,7 +679,7 @@ void getlvalue(ref CodeBuilder cdb,ref code pcs,elem* e,regm_t keepmsk,RM rm = R
             cod3_ptrchk(cdb, pcs, keepmsk);        // validate pointer code
     }
 
-    printf("fl: %s\n", fl_str(fl));
+    //printf("fl: %s\n", fl_str(fl));
     switch (fl)
     {
         case FL.oper:
@@ -748,7 +750,7 @@ void getlvalue(ref CodeBuilder cdb,ref code pcs,elem* e,regm_t keepmsk,RM rm = R
                  ) ||
                  (e12.Eoper == OPconst && !e1.Ecount && el_signx32(e12))) &&
                 e1.Ecount == e1.Ecomsub &&
-                (!e1.Ecount || (~keepmsk & ALLREGS & INSTR.MSW)) &&
+                (!e1.Ecount || (~keepmsk & INSTR.ALLREGS & INSTR.MSW)) &&
                 tysize(e11.Ety) == REGSIZE
                )
             {
@@ -808,7 +810,7 @@ void getlvalue(ref CodeBuilder cdb,ref code pcs,elem* e,regm_t keepmsk,RM rm = R
                     {
                         int rbase;
 
-                        scratchm = ALLREGS & ~keepmsk;
+                        scratchm = INSTR.ALLREGS & ~keepmsk;
                         const r = allocreg(cdb, scratchm, TYint);
 
                         if (ssflags & SSFLnobase1)
@@ -1384,11 +1386,19 @@ void fixresult(ref CodeBuilder cdb, elem* e, regm_t retregs, ref regm_t outretre
         bool opsflag = false;
         if (tyfloating(tym))
         {
-            assert(retregs & INSTR.FLOATREGS);
+            assert(outretregs & INSTR.FLOATREGS);
             reg_t Vn = findreg(retregs);
             reg_t Vd = allocreg(cdb, outretregs, tym);  // allocate return regs
+            //printf("Vn: %d Vd: %d\n", Vn, Vd);
             uint ftype = INSTR.szToFtype(sz);
-            cdb.gen1(INSTR.fmov(ftype,Vn,Vd));  // FMOV Vd,Vn
+            if (Vn < 32) // move integer to float
+            {
+                cdb.gen1(INSTR.fmov_float_gen(1,ftype,0,7,Vn,Vd));   // FMOV Vd,Rn https://www.scs.stanford.edu/~zyedidia/arm64/fmov_float_gen.html
+            }
+            else // move float to float
+            {
+                cdb.gen1(INSTR.fmov(ftype,Vn,Vd));  // FMOV Vd,Vn
+            }
         }
         else if (sz > REGSIZE)
         {
@@ -1729,7 +1739,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
 
         /* Print what we have discovered
          */
-        static if (1)
+        static if (0)
             for (int i = np; --i >= 0;)
             {
                 Parameter* p = &parameters[i];
@@ -1817,7 +1827,12 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                     assert(0);
 
                 case OPstrpar:
-                    assert(type_size(ep.ET) == 0);
+                    /* OPstrpar is only used for 0-sized structs. Depending on the
+                     * OS and type of the function being called, it's size can be
+                     * set at 0 or 1. But for parameters, a slot is used for it in
+                     * either case.
+                     */
+                    //assert(type_size(ep.ET) <= 1); // a 0-sized struct
                     break;
 
                 default:
@@ -1862,7 +1877,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         Parameter* p = &parameters[i];
         elem* ep = p.e;
         reg_t preg = p.reg;
-        printf("\nparameter[%d]: %s\n", i, regm_str(mask(preg)));
+        //printf("\nparameter[%d]: %s\n", i, regm_str(mask(preg)));
         if (preg == NOREG)
         {
             //elem_print(ep);
@@ -1898,23 +1913,11 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
 
             movParams(cg, cdbparams, ep, p.offset, sz);
 
-            regm_t tosave = keepmsk & ~cg.msavereg;
+            regm_t tosave = keepmsk & ~cg.msavereg;          // registers to save and restore
             cg.msavereg &= ~keepmsk | overlap;
-
-            // tosave is the mask to save and restore
-            for (reg_t j = 0; tosave; j++)
-            {
-                regm_t mi = mask(j);
-                if (mi & tosave)
-                {
-                    uint idx;
-                    cg.regsave.save(cdbsave, j, idx);
-                    cg.regsave.restore(cdbrestore, j, idx);
-                    saved |= mi;
-                    keepmsk &= ~mi;             // don't need to keep these for rest of params
-                    tosave &= ~mi;
-                }
-            }
+            saved |= tosave;
+            keepmsk &= ~tosave;             // don't need to keep these for rest of params
+            gensaverestore(tosave,cdbsave,cdbrestore);
 
             cdb.append(cdbsave);
             cdb.append(cdbparams);
@@ -1948,21 +1951,9 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 if (keepmsk & retregs)
                 {
                     regm_t tosave = keepmsk & retregs;
-
-                    // tosave is the mask to save and restore
-                    for (reg_t j = 0; tosave; j++)
-                    {
-                        regm_t mi = mask(j);
-                        if (mi & tosave)
-                        {
-                            uint idx;
-                            cg.regsave.save(cdbsave, j, idx);
-                            cg.regsave.restore(cdbrestore, j, idx);
-                            saved |= mi;
-                            keepmsk &= ~mi;             // don't need to keep these for rest of params
-                            tosave &= ~mi;
-                        }
-                    }
+                    saved |= tosave;
+                    keepmsk &= ~tosave;             // don't need to keep these for rest of params
+                    gensaverestore(tosave,cdbsave,cdbrestore);
                 }
                 cdb.append(cdbsave);
 
@@ -2241,6 +2232,7 @@ static if (0)
 
     reg_t reg1, reg2;
     retregs = allocretregs(cgstate, e.Ety, e.ET, tym1, reg1, reg2);
+    //printf("retregs: %s e.Ety: %s tym1: %s\n", regm_str(retregs), tym_str(e.Ety), tym_str(tym1));
 
     assert(retregs || !pretregs);
 
@@ -2366,8 +2358,8 @@ static if (0)
 @trusted
 private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint funcargtos, targ_size_t sz)
 {
-    printf("movParams(funcargtos: %d sz: %d)\n", funcargtos, cast(uint)sz);
-    elem_print(e);
+    //printf("movParams(funcargtos: %d sz: %d)\n", funcargtos, cast(uint)sz);
+    //elem_print(e);
     assert(e && e.Eoper != OPparam);
 
 
@@ -2379,7 +2371,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint funcar
             assert(0);
 
         case OPstrpar:
-            assert(sz == 0);
+            assert(sz <= 16);   // a zero-sized struct, but still occupies aligned space on stack
             regm_t retregs0 = 0;
             scodelem(cgstate,cdb, e.E1, retregs0, 0, false);
             freenode(e);
@@ -2473,6 +2465,7 @@ void loaddata(ref CodeBuilder cdb, elem* e, ref regm_t outretregs)
     cs.Iflags = 0;
     regm_t flags = outretregs & mPSW;             /* save original                */
     forregs = outretregs & (INSTR.ALLREGS | INSTR.FLOATREGS);     // XMMREGS ?
+    bool isPair = isRegisterPair(true,tym,0);
     if (e.Eoper == OPconst)
     {
         if (0 && tyvector(tym) && forregs & XMMREGS)    // TODO AArch64
@@ -2486,6 +2479,25 @@ void loaddata(ref CodeBuilder cdb, elem* e, ref regm_t outretregs)
 
         if (tyfloating(tym))
         {
+            forregs = outretregs & INSTR.FLOATREGS;
+            if (isPair)
+            {
+                const vreg_im = allocreg(cdb, forregs, tym);     // allocate floating point register
+                const vreg_re = findreg(forregs & INSTR.LSW);
+                double value_re = e.Vcfloat.re;
+                double value_im = e.Vcfloat.im;
+                if (sz == 16)
+                {
+                    value_re = e.Vcdouble.re;
+                    value_im = e.Vcdouble.im;
+                }
+                else if (sz == 32)
+                    assert(0);          // TODO AArch64 for Linux
+                loadFloatRegConst(cdb,vreg_re,value_re,sz / 2);
+                loadFloatRegConst(cdb,vreg_im,value_im,sz / 2);
+                fixresult(cdb, e, forregs, outretregs);
+                return;
+            }
             const vreg = allocreg(cdb, forregs, tym);     // allocate floating point register
             double value = e.Vfloat;
             if (sz == 8)
@@ -2566,6 +2578,7 @@ void loaddata(ref CodeBuilder cdb, elem* e, ref regm_t outretregs)
 
                 cgstate.mfuncreg &= ~pregm;
                 cgstate.regcon.used |= pregm;
+                //printf("pregm: %s outretregs: %s\n", regm_str(pregm), regm_str(outretregs));
                 fixresult(cdb,e,pregm,outretregs);
                 return;
             }
@@ -2638,6 +2651,13 @@ void loaddata(ref CodeBuilder cdb, elem* e, ref regm_t outretregs)
             loadea(cdb,e,cs,0,reg,0,0,0,RM.load);
             outretregs = mask(reg) | flags;
         }
+        else if (isPair)
+        {
+            reg = findreg(forregs & INSTR.MSW);
+            loadea(cdb, e, cs, 0x8B, reg, REGSIZE, forregs, 0); // MOV reg,data+2
+            reg = findreg(forregs & INSTR.LSW);
+            loadea(cdb, e, cs, 0x8B, reg, 0, forregs, 0);       // MOV reg,data
+        }
         else if (sz <= REGSIZE)
         {
             if (tyfloating(tym))
@@ -2653,16 +2673,9 @@ void loaddata(ref CodeBuilder cdb, elem* e, ref regm_t outretregs)
                 loadea(cdb, e, cs, opmv, reg, 0, 0, 0, RM.load);
             }
         }
-        else if (sz <= 2 * REGSIZE)
-        {
-            reg = findreg(forregs & INSTR.MSW);
-            loadea(cdb, e, cs, 0x8B, reg, REGSIZE, forregs, 0); // MOV reg,data+2
-            reg = findreg(forregs & INSTR.LSW);
-            loadea(cdb, e, cs, 0x8B, reg, 0, forregs, 0);       // MOV reg,data
-        }
         else if (sz >= 8)
         {
-            if ((outretregs & (mSTACK | mPSW)) == mSTACK)
+            if (0 && (outretregs & (mSTACK | mPSW)) == mSTACK)
             {
                 // Note that we allocreg(DOUBLEREGS) needlessly
                 cgstate.stackchanged = 1;

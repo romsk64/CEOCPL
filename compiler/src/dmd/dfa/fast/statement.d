@@ -8,7 +8,7 @@
  * 3. Handling Loops: Managing state for `for`, `while`, and `do` loops.
  * 4. Handling Jumps: Resolving `break`, `continue`, `goto`, and `return`.
  *
- * Copyright: Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:   $(LINK2 https://cattermole.co.nz, Richard (Rikki) Andrew Cattermole)
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:    $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dfa/fast/statement.d, dfa/fast/statement.d)
@@ -603,7 +603,7 @@ final:
             // This signals that no code after this point in the current block is reachable.
             dfaCommon.currentDFAScope.haveJumped = true;
             dfaCommon.currentDFAScope.haveReturned = true;
-            analyzer.reporter.onEndOfScope(dfaCommon.currentFunction, exp.loc);
+            analyzer.reporter.onEndOfScope(dfaCommon.currentFunction, st.loc);
             break;
 
         case STMT.Compound:
@@ -895,6 +895,7 @@ final:
                 dfaCommon.currentDFAScope.inConditional = true;
                 dfaCommon.setScopeAsLoopyLabel;
 
+                if (theCondition !is null)
                 {
                     dfaCommon.printStructure((ref OutBuffer ob,
                             scope PrintPrefixType prefix) => ob.writestring("For condition:\n"));
@@ -909,6 +910,8 @@ final:
 
                     expWalker.seeAssert(lrCondition, theCondition.loc, true);
                 }
+                else
+                    dfaCommon.currentDFAScope.isLoopyLabelKnownToHaveRun = true;
 
                 dfaCommon.printStructure((ref OutBuffer ob,
                         scope PrintPrefixType prefix) => ob.writestring("For body:\n"));

@@ -1,7 +1,7 @@
 /**
  * Convert to Intermediate Representation (IR) for the back-end.
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/glue/toir.d, _toir.d)
@@ -93,6 +93,7 @@ struct IRState
     ErrorSink eSink;                // sink for error messages
     bool mayThrow;                  // the expression being evaluated may throw
     bool Cfile;                     // use C semantics
+    int countNullDerefCheckDisable; // should the null check be disabled due to backend fragility
 
     this(Module m, FuncDeclaration fd, Array!(elem*)* varsInScope, Dsymbols* deferToObj, Label*[void*]* labels,
         const Param* params, const Target* target, ErrorSink eSink)
@@ -125,6 +126,15 @@ struct IRState
         if (m.filetype == FileType.c)
             return false;
         return dmd.funcsem.arrayBoundsCheck(getFunc());
+    }
+
+    /**********************
+     * Returns:
+     *    true if do null dereference checking for the current function
+     */
+    bool nullDerefCheck()
+    {
+        return countNullDerefCheckDisable == 0 && dmd.funcsem.nullDerefCheck(getFunc());
     }
 
     /****************************
@@ -586,6 +596,11 @@ int intrinsic_op(FuncDeclaration fd)
     {
         if ((op == OPbsf || op == OPbsr) && argtype1 is Type.tuns64)
             return NotIntrinsic;
+    }
+    else if (target.isAArch64)
+    {
+        if (op == OPbsf || op == OPbsr || op == OPbtc || op == OPbtr || op == OPbts)
+            return NotIntrinsic;        // TODO AArch64
     }
     return op;
 
@@ -1143,8 +1158,6 @@ void buildCapture(FuncDeclaration fd)
 {
     if (!driverParams.symdebug)
         return;
-    if (target.objectFormat() != Target.ObjectFormat.coff)  // toDebugClosure only implemented for CodeView,
-        return;                 //  but optlink crashes for negative field offsets
 
     if (fd.closureVars.length && !fd.needsClosure)
     {

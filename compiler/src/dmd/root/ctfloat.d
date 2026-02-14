@@ -1,7 +1,7 @@
 /**
  * Collects functions for compile-time floating-point calculations.
  *
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/ctfloat.d, root/_ctfloat.d)
@@ -25,11 +25,10 @@ import dmd.root.port;
 
 private
 {
-    version(CRuntime_DigitalMars) __gshared extern (C) extern const(char)* __locale_decpoint;
-
     version(CRuntime_Microsoft)
     {
-        public import dmd.root.longdouble : longdouble_soft, ld_sprint;
+        import dmd.root.longdouble : longdouble_soft, ld_sprint;
+        import dmd.root.strtold : strtold = strtold_ms;
     }
 }
 
@@ -172,7 +171,7 @@ extern (C++) struct CTFloat
     static real_t parse(const(char)* literal, out bool isOutOfRange)
     {
         errno = 0;
-        auto r = Port.strtold(literal);
+        auto r = strtold(literal, null);
         isOutOfRange = (errno == ERANGE);
         return r;
     }

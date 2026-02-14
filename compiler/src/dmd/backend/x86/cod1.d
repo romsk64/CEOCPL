@@ -7,7 +7,7 @@
  * $(LINK2 https://www.dlang.org, D programming language).
  *
  * Copyright:   Copyright (C) 1984-1998 by Symantec
- *              Copyright (C) 2000-2025 by The D Language Foundation, All Rights Reserved
+ *              Copyright (C) 2000-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/x86/cod1.d, backend/cod1.d)
@@ -3113,6 +3113,9 @@ bool FuncParamRegs_alloc(ref FuncParamRegs fpr, type* t, tym_t ty, out reg_t pre
             {
                 targ1 = t.Ttag.Sstruct.Sarg1type;
                 targ2 = t.Ttag.Sstruct.Sarg2type;
+                //type_print(t);
+                //if (targ1) type_print(targ1);
+                //if (targ2) type_print(targ2);
             }
             else if (tybasic(t.Tty) == TYarray)
             {
@@ -3140,6 +3143,7 @@ bool FuncParamRegs_alloc(ref FuncParamRegs fpr, type* t, tym_t ty, out reg_t pre
     reg_t* preg = &preg1;
     int regcntsave = fpr.regcnt;
     int xmmcntsave = fpr.xmmcnt;
+    bool AArch64 = cgstate.AArch64;
 
     if (config.exe == EX_WIN64)
     {
@@ -3171,10 +3175,12 @@ bool FuncParamRegs_alloc(ref FuncParamRegs fpr, type* t, tym_t ty, out reg_t pre
         }
 
         if (tybasic(ty) == TYcfloat
-            && fpr.numfloatregs - fpr.xmmcnt >= 1)
+            && fpr.numfloatregs - fpr.xmmcnt >= (1 + AArch64))
         {
             // Allocate XMM register
             preg1 = fpr.floatregs[fpr.xmmcnt++];
+            if (AArch64)
+                preg2 = fpr.floatregs[fpr.xmmcnt++];
             return true;
         }
     }
@@ -3213,7 +3219,7 @@ bool FuncParamRegs_alloc(ref FuncParamRegs fpr, type* t, tym_t ty, out reg_t pre
         }
         if (fpr.xmmcnt < fpr.numfloatregs)
         {
-            if (tyfloating(ty) && cgstate.AArch64)
+            if (tyfloating(ty) && AArch64)
             {
                 *preg = fpr.floatregs[fpr.xmmcnt];
                 ++fpr.xmmcnt;
@@ -4108,6 +4114,7 @@ static if (0)
 
     reg_t reg1, reg2;
     retregs = allocretregs(cgstate, e.Ety, e.ET, tym1, reg1, reg2);
+    //printf("retregs: %s e.Ety: %s tym1: %s\n", regm_str(retregs), tym_str(e.Ety), tym_str(tym1));
 
     assert(retregs || !pretregs);
 

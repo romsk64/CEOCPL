@@ -4,7 +4,7 @@
  * Compiler implementation of the
  * $(LINK2 https://www.dlang.org, D programming language).
  *
- * Copyright:   Copyright (C) 2009-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 2009-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/machobj.d, backend/machobj.d)
@@ -977,7 +977,8 @@ void MachObj_term(const(char)[] objfilename)
                                         rel.r_type = r.rtype == RELadd ? ARM64_RELOC_PAGEOFF12 : ARM64_RELOC_PAGE21;
                                         rel.r_pcrel = r.rtype == RELadd ? 0 : 1;
                                     }
-                                    assert(s.Sfl != FL.tlsdata);
+                                    if (s.Sfl == FL.tlsdata && s.Sclass == SC.comdat)
+                                        goto case SC.global;
                                     rel.r_address = cast(int)r.offset;
                                     rel.r_symbolnum = s.Sxtrnnum;
                                     rel.r_length = 2;
